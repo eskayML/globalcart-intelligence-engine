@@ -1,31 +1,76 @@
-# GlobalCart Intelligence Engine
+<div align="center">
+  <h1>🛒 GlobalCart Intelligence Engine</h1>
+  <p><b>An Advanced, Secure RAG System for International Retail Scale</b></p>
 
-An advanced Retrieval-Augmented Generation (RAG) system built to solve the complex constraints of international retail. Built specifically for easy deployment on **Streamlit Community Cloud (Streamlit Share)**.
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
+  [![Pinecone](https://img.shields.io/badge/Vector_DB-Pinecone-black.svg?logo=pinecone)](https://www.pinecone.io/)
+  [![LangChain](https://img.shields.io/badge/Orchestration-LangChain-green.svg)](https://langchain.com/)
+  [![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B.svg?logo=streamlit&logoColor=white)](https://streamlit.io/)
+  
+  <br />
+</div>
 
-## Key Architecture
+## 📌 Overview
 
-This system strictly abides by the rules defined in the `Task: Global Retail Intelligence Engine` brief.
+The **GlobalCart Intelligence Engine** is a production-grade Retrieval-Augmented Generation (RAG) architecture built to solve complex constraints in large-scale international retail. 
 
-1. **No Local Models Allowed**: 
-    - LLM Generation: Handled completely via OpenRouter.
-    - Embeddings: Processed completely via **Pinecone Inference API** (`multilingual-e5-large`). Zero local GPU/CPU overhead.
-2. **The Regional Integrity Test**: 
-    - A Streamlit sidebar dictates the active country. 
-    - Queries use hard Pinecone metadata filtering (`filter={"country": {"$eq": country_code}}`). A user in Ghana (`GH`) will *never* see a product or policy meant for South Africa (`ZA`).
-3. **The Security (Red Team) Test**: 
-    - The `app.py` enforces a **Hard Guardrail** at the retrieval layer. The `internal_notes` field containing Profit Margins and PII is intentionally stripped *before* the context is ever passed to the LLM. It is mathematically impossible for the LLM to hallucinate or leak this data.
-4. **The Technical Precision Test**: 
-    - SKUs and exact technical specifications are retained perfectly.
+Querying massive, unstructured retail databases often results in hallucinations, cross-regional data contamination, and internal data leaks. This engine mitigates those risks through **Hard Metadata Filtering**, **Hybrid Search**, and **Implicit Data Masking**.
 
-## Setup & Deployment on Streamlit Share
+## 🏗️ Core Architecture & Guardrails
 
-1. Fork or clone this repository to your GitHub account.
-2. Log into [Streamlit Share (share.streamlit.io)](https://share.streamlit.io/).
-3. Click **New app** -> Deploy from your GitHub repository.
-4. Point it to this repository and set the main file path to `app.py`.
-5. Under **Advanced settings... -> Secrets**, securely paste your API keys:
-   ```toml
-   PINECONE_API_KEY = "your_pinecone_key"
-   OPENROUTER_API_KEY = "your_openrouter_key"
-   ```
-6. Click Deploy!
+1. **Strict Regional Integrity (No Cross-Contamination)**  
+   When a user queries the database from a specific region (e.g., *Ghana*), the system applies a hard filter to the Pinecone vector database (`filter={"country": {"$eq": country_code}}`). It is mathematically impossible for the retrieval engine to return prices, policies, or products meant for a different operational region.
+   
+2. **Implicit Data Masking (Red Team Tested)**  
+   Retail datasets contain sensitive PII (Personally Identifiable Information), supplier contacts, and internal profit margins. This system implements a retrieval-layer guardrail that explicitly intercepts and strips out the `Internal_Notes` column from the vector context *before* it is passed to the LLM. 
+   
+3. **Zero Local Overhead**  
+   The application is fully abstracted to the cloud to prevent memory exhaustion and allow serverless deployment:
+   - **Embeddings:** Processed natively via the `pinecone.inference.embed` API (`multilingual-e5-large` model).
+   - **Generation:** Handled entirely via the OpenRouter API (`meta-llama/llama-3.1-8b-instruct`).
+
+## 🚀 Installation & Local Setup
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/eskayML/globalcart-intelligence-engine.git
+cd globalcart-intelligence-engine
+```
+
+### 2. Install Dependencies
+Ensure you have Python 3.11+ installed.
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Environment Configuration
+Duplicate the `.env.example` file and add your API keys:
+```bash
+cp .env.example .env
+```
+Inside `.env`, populate:
+```ini
+PINECONE_API_KEY="your_pinecone_api_key_here"
+OPENROUTER_API_KEY="your_openrouter_api_key_here"
+```
+
+### 4. Seed the Vector Database
+Before launching the UI, you must index the raw `inventory.csv` into Pinecone. Run the seeding script once:
+```bash
+python seed_database.py
+```
+
+### 5. Launch the Application
+Run the Streamlit frontend locally:
+```bash
+streamlit run app.py
+```
+
+---
+
+## 🤝 Contributing
+Contributions are welcome. Please ensure any pull requests involving retrieval mechanics do not bypass the core metadata filters or security guardrails.
+
+## 📝 License
+This project is licensed under the [MIT License](LICENSE).

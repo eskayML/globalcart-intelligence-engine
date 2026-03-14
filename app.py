@@ -1,27 +1,50 @@
+import streamlit as st
 import os
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
-from schemas import QueryRequest
-from typing import List, Dict
-import json
 import requests
-
+from pinecone import Pinecone
 from langchain_openai import ChatOpenAI
-from langchain_pinecone import PineconeVectorStore
 from langchain_core.prompts import PromptTemplate
-from langchain_core.documents import Document
 
-from dotenv import load_dotenv
-load_dotenv()
+st.set_page_config(page_title="GlobalCart AI Engine", page_icon="🛒", layout="centered")
 
-app = FastAPI(title="GlobalCart Intelligence Engine")
+st.title("🛒 GlobalCart Intelligence Engine")
+st.markdown("Advanced Retail RAG System with Strict Regional & Security Guardrails.")
 
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+# Access keys via Streamlit Secrets (for Streamlit Community Cloud) or local .env
+def get_api_key(key_name):
+    if key_name in st.secrets:
+        return st.secrets[key_name]
+    return os.getenv(key_name)
+
+PINECONE_API_KEY = get_api_key("PINECONE_API_KEY")
+OPENROUTER_API_KEY = get_api_key("OPENROUTER_API_KEY")
 INDEX_NAME = "globalcart-retail-engine"
 
-# Using Pinecone's native multilingual-e5-large embeddings API to avoid local models
-def get_pinecone_embeddings(texts: List[str]) -> List[List[float]]:
+if not PINECONE_API_KEY or not OPENROUTER_API_KEY:
+    st.error("Missing API Keys! Please set PINECONE_API_KEY and OPENROUTER_API_KEY in the Streamlit App Settings (Secrets) or locally.")
+    st.stop()
+
+# --- Sidebar: The Regional Integrity Test ---
+st.sidebar.header("🌍 Regional Context")
+country_code = st.sidebar.selectbox(
+    "Select your shopping region:",
+    ["GH", "ZA", "IN", "NL", "KE", "US", "UK"]
+)
+st.sidebar.info(f"Metadata Filtering active. You are physically locked into the **{country_code}** catalog. It is mathematically impossible to retrieve products from outside this region.")
+
+# Initialize Clients (No local models, strictly APIs)
+pc = Pinecone(api_key=PINECONE_API_KEY)
+
+# Use OpenRouter for the LLM
+llm = ChatOpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+    model="meta-llama/llama-3.1-8b-instruct",
+    temperature=0.0
+)
+
+# Use Pinecone Inference API for embeddings (multilingual-e5-large)
+def get_pinecone_embeddings(text: str) -> list[float]:
     url = "https://api.pinecone.io/embed"
     headers = {
         "Api-Key": PINECONE_API_KEY,
@@ -30,36 +53,19 @@ def get_pinecone_embeddings(texts: List[str]) -> List[List[float]]:
     }
     payload = {
         "model": "multilingual-e5-large",
-        "inputs": [{"text": t} for t in texts],
+        "inputs": [{"text": text}],
         "parameters": {
-            "input_type": "passage",
+            "input_type": "query",
             "truncate": "END"
         }
     }
     response = requests.post(url, json=payload, headers=headers)
     if response.status_code != 200:
-        raise Exception(f"Failed to embed: {response.text}")
+        st.error(f"Embedding failed: {response.text}")
+        st.stop()
     data = response.json()
-    return [d["values"] for d in data["data"]]
+    return data["data"][0]["values"]
 
-# Wrapper class for LangChain compatibility (if needed)
-class PineconeEmbedder:
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return get_pinecone_embeddings(texts)
-    def embed_query(self, text: str) -> List[float]:
-        return get_pinecone_embeddings([text])[0]
-
-# Setup the LLM
-llm = ChatOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-    model="meta-llama/llama-3.1-8b-instruct", # OpenRouter standard
-    temperature=0.0 # Absolute zero for production RAG
-)
-
-embeddings = PineconeEmbedder()
-
-# System Prompt emphasizing strict security guardrails
 SYS_PROMPT = """You are the GlobalCart AI Assistant. 
 You provide extremely precise, helpful answers based strictly on the provided context.
 
@@ -79,58 +85,69 @@ QUESTION: {question}
 ANSWER:
 """
 
-@app.post("/query")
-async def handle_query(req: QueryRequest):
-    try:
-        from pinecone import Pinecone
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index(INDEX_NAME)
-        
-        # 1. Embed the query
-        q_vec = embeddings.embed_query(req.query)
-        
-        # 2. Hybrid Retrieval with Hard Metadata Filtering!
-        # This completely guarantees the "Regional Integrity Test"
-        results = index.query(
-            vector=q_vec,
-            top_k=5,
-            include_metadata=True,
-            filter={
-                "country": {"$eq": req.country} # Hard limit to user's region
-            }
-        )
-        
-        # 3. Context Construction
-        # Here we format the context but explicitly strip out "internal_notes" if present!
-        # This acts as a secondary hard-guardrail against the "Red Team Test"
-        safe_context_parts = []
-        for match in results["matches"]:
-            meta = match["metadata"]
-            if meta.get("doc_type") == "product":
-                safe_context_parts.append(
-                    f"Product: {meta.get('name')} | SKU: {meta.get('sku')} | "
-                    f"Price: {meta.get('currency')} {meta.get('price')} | Desc: {meta.get('description')}"
-                )
-            else:
-                safe_context_parts.append(f"Policy: {meta.get('title')} | Detail: {meta.get('content')}")
+# --- Chat UI ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
+    # Render user prompt
+    st.session_state.messages.append({"role": "user", "content": prompt_text})
+    with st.chat_message("user"):
+        st.markdown(prompt_text)
+
+    # Render Assistant Response
+    with st.chat_message("assistant"):
+        with st.spinner("Executing secure retrieval via Pinecone..."):
+            try:
+                # 1. Embed query
+                q_vec = get_pinecone_embeddings(prompt_text)
                 
-        context_str = "\n".join(safe_context_parts)
-        
-        # If no context found due to metadata filter
-        if not context_str:
-            return JSONResponse({"answer": "I could not find any relevant information for your region."})
-
-        # 4. Generate Response
-        prompt = PromptTemplate.from_template(SYS_PROMPT)
-        chain = prompt | llm
-        
-        resp = chain.invoke({
-            "country": req.country,
-            "context": context_str,
-            "question": req.query
-        })
-        
-        return JSONResponse({"answer": resp.content})
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+                # 2. Hard Metadata Filter on Retrieval (The Regional Integrity Test)
+                index = pc.Index(INDEX_NAME)
+                results = index.query(
+                    vector=q_vec,
+                    top_k=5,
+                    include_metadata=True,
+                    filter={
+                        "country": {"$eq": country_code}
+                    }
+                )
+                
+                # 3. Construct Safe Context (The Red Team Security Guardrail)
+                safe_context_parts = []
+                for match in results["matches"]:
+                    meta = match["metadata"]
+                    # We EXPLICITLY strip out 'internal_notes' here before the LLM ever sees it.
+                    if meta.get("doc_type") == "product":
+                        safe_context_parts.append(
+                            f"Product: {meta.get('name', 'Unknown')} | SKU: {meta.get('sku', 'Unknown')} | "
+                            f"Price: {meta.get('currency', 'USD')} {meta.get('price', '0.00')} | Desc: {meta.get('description', '')}"
+                        )
+                    else:
+                        safe_context_parts.append(f"Policy: {meta.get('title', 'Policy')} | Detail: {meta.get('content', '')}")
+                        
+                context_str = "\n".join(safe_context_parts)
+                
+                if not context_str:
+                    final_response = f"I could not find any relevant information for your query in the **{country_code}** region."
+                else:
+                    # 4. Generate Answer via OpenRouter
+                    prompt_template = PromptTemplate.from_template(SYS_PROMPT)
+                    chain = prompt_template | llm
+                    
+                    resp = chain.invoke({
+                        "country": country_code,
+                        "context": context_str,
+                        "question": prompt_text
+                    })
+                    final_response = resp.content
+                
+                st.markdown(final_response)
+                st.session_state.messages.append({"role": "assistant", "content": final_response})
+                
+            except Exception as e:
+                st.error(f"Error during execution: {str(e)}")

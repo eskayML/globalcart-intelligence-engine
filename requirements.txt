@@ -1,0 +1,5 @@
+streamlit
+pinecone-client
+langchain-openai
+langchain-core
+requests

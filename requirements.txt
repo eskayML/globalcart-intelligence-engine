@@ -1,5 +1,4 @@
-streamlit
-pinecone-client
-langchain-openai
-langchain-core
-requests
+streamlit>=1.32.0
+pinecone-client>=4.0.0
+langchain-openai>=0.1.0
+langchain-core>=0.1.0

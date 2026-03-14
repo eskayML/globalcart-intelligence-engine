@@ -1,20 +1,23 @@
 import streamlit as st
 import os
-import requests
 from pinecone import Pinecone
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 
+# Configure Streamlit UI
 st.set_page_config(page_title="GlobalCart AI Engine", page_icon="🛒", layout="centered")
 
 st.title("🛒 GlobalCart Intelligence Engine")
 st.markdown("Advanced Retail RAG System with Strict Regional & Security Guardrails.")
 
-# Access keys via Streamlit Secrets (for Streamlit Community Cloud) or local .env
+# Robust API Key Fetcher (Supports Streamlit Community Cloud Secrets & Local .env)
 def get_api_key(key_name):
-    if key_name in st.secrets:
-        return st.secrets[key_name]
-    return os.getenv(key_name)
+    try:
+        if key_name in st.secrets:
+            return st.secrets[key_name]
+    except Exception:
+        pass
+    return os.environ.get(key_name)
 
 PINECONE_API_KEY = get_api_key("PINECONE_API_KEY")
 OPENROUTER_API_KEY = get_api_key("OPENROUTER_API_KEY")
@@ -32,39 +35,17 @@ country_code = st.sidebar.selectbox(
 )
 st.sidebar.info(f"Metadata Filtering active. You are physically locked into the **{country_code}** catalog. It is mathematically impossible to retrieve products from outside this region.")
 
-# Initialize Clients (No local models, strictly APIs)
+# Initialize the modern Pinecone Client (v4.0.0+)
+# This client natively supports Serverless Inference without manual HTTP requests!
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# Use OpenRouter for the LLM
+# Initialize the modern LangChain OpenRouter Client
 llm = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
     model="meta-llama/llama-3.1-8b-instruct",
     temperature=0.0
 )
-
-# Use Pinecone Inference API for embeddings (multilingual-e5-large)
-def get_pinecone_embeddings(text: str) -> list[float]:
-    url = "https://api.pinecone.io/embed"
-    headers = {
-        "Api-Key": PINECONE_API_KEY,
-        "Content-Type": "application/json",
-        "X-Pinecone-API-Version": "2024-10"
-    }
-    payload = {
-        "model": "multilingual-e5-large",
-        "inputs": [{"text": text}],
-        "parameters": {
-            "input_type": "query",
-            "truncate": "END"
-        }
-    }
-    response = requests.post(url, json=payload, headers=headers)
-    if response.status_code != 200:
-        st.error(f"Embedding failed: {response.text}")
-        st.stop()
-    data = response.json()
-    return data["data"][0]["values"]
 
 SYS_PROMPT = """You are the GlobalCart AI Assistant. 
 You provide extremely precise, helpful answers based strictly on the provided context.
@@ -85,7 +66,7 @@ QUESTION: {question}
 ANSWER:
 """
 
-# --- Chat UI ---
+# --- Chat UI State Management ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -101,10 +82,19 @@ if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
 
     # Render Assistant Response
     with st.chat_message("assistant"):
-        with st.spinner("Executing secure retrieval via Pinecone..."):
+        with st.spinner("Executing secure retrieval via Pinecone Inference..."):
             try:
-                # 1. Embed query
-                q_vec = get_pinecone_embeddings(prompt_text)
+                # 1. Embed query using official Pinecone Inference SDK (v4.0.0+)
+                # This guarantees zero bugs with HTTP headers or formatting
+                embed_response = pc.inference.embed(
+                    model="multilingual-e5-large",
+                    inputs=[prompt_text],
+                    parameters={
+                        "input_type": "query",
+                        "truncate": "END"
+                    }
+                )
+                q_vec = embed_response[0].values
                 
                 # 2. Hard Metadata Filter on Retrieval (The Regional Integrity Test)
                 index = pc.Index(INDEX_NAME)
@@ -135,7 +125,7 @@ if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
                 if not context_str:
                     final_response = f"I could not find any relevant information for your query in the **{country_code}** region."
                 else:
-                    # 4. Generate Answer via OpenRouter
+                    # 4. Generate Answer via LangChain + OpenRouter
                     prompt_template = PromptTemplate.from_template(SYS_PROMPT)
                     chain = prompt_template | llm
                     

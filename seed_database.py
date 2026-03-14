@@ -39,11 +39,11 @@ def load_csv(file_path):
         reader = csv.DictReader(f)
         for row in reader:
             # Typecast price safely
-            if row.get('price'):
+            if row.get('Price_Local'):
                 try:
-                    row['price'] = float(row['price'])
+                    row['Price_Local'] = float(row['Price_Local'])
                 except ValueError:
-                    row['price'] = 0.0
+                    row['Price_Local'] = 0.0
             data.append(row)
     return data
 
@@ -56,11 +56,7 @@ if not inventory_data:
 
 def create_embedding_text(item):
     """Creates the text chunk that Pinecone will actually embed and search against."""
-    if item.get("doc_type") == "product":
-        # Include SKU, Name, and Desc to ensure hybrid/semantic search catches it
-        return f"Product: {item.get('name', '')}. SKU: {item.get('sku', '')}. Description: {item.get('description', '')}"
-    else:
-        return f"Policy: {item.get('title', '')}. Content: {item.get('content', '')}"
+    return f"Product: {item.get('Item_Name', '')}. ID/SKU: {item.get('Product_ID', '')}. Category: {item.get('Category', '')}. Specs: {item.get('Technical_Specs', '')}"
 
 print(f"Preparing to embed and index {len(inventory_data)} items from {csv_file}...")
 
@@ -90,20 +86,19 @@ for i in range(0, len(inventory_data), BATCH_SIZE):
             
             # The metadata is what we filter on and return to the LLM
             metadata = {
-                "doc_type": item.get("doc_type", ""),
-                "country": item.get("country", ""),
-                "title": item.get("title", ""),
-                "content": item.get("content", ""),
-                "name": item.get("name", ""),
-                "sku": item.get("sku", ""),
-                "price": item.get("price", 0.0),
-                "currency": item.get("currency", ""),
-                "description": item.get("description", ""),
-                "internal_notes": item.get("internal_notes", "") # Uploaded but filtered out at retrieval!
+                "doc_type": "product",
+                "country": item.get("Country", "").strip(),
+                "product_id": item.get("Product_ID", ""),
+                "name": item.get("Item_Name", ""),
+                "category": item.get("Category", ""),
+                "price": item.get("Price_Local", 0.0),
+                "currency": item.get("Currency", ""),
+                "specs": item.get("Technical_Specs", ""),
+                "internal_notes": item.get("Internal_Notes", "") # Uploaded but filtered out at retrieval!
             }
             
             vectors_to_upsert.append({
-                "id": item["id"],
+                "id": item["Product_ID"],
                 "values": embedding,
                 "metadata": metadata
             })
@@ -113,6 +108,6 @@ for i in range(0, len(inventory_data), BATCH_SIZE):
         print(f"Upserted batch {i // BATCH_SIZE + 1} ({len(batch)} items).")
         
     except Exception as e:
-        print(f"Error processing batch: {e}")
+        print(f"Error processing batch {i // BATCH_SIZE + 1}: {e}")
 
 print("✅ Data seeding complete! The vector database is fully populated.")

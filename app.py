@@ -29,11 +29,11 @@ if not PINECONE_API_KEY or not OPENROUTER_API_KEY:
 
 # --- Sidebar: The Regional Integrity Test ---
 st.sidebar.header("🌍 Regional Context")
-country_code = st.sidebar.selectbox(
+country_selection = st.sidebar.selectbox(
     "Select your shopping region:",
-    ["GH", "ZA", "IN", "NL", "KE", "US", "UK"]
+    ["Nigeria", "Ghana", "Kenya", "South Africa", "Netherlands", "Cameroon", "India", "Ivory Coast", "Rwanda", "Uganda"]
 )
-st.sidebar.info(f"Metadata Filtering active. You are physically locked into the **{country_code}** catalog. It is mathematically impossible to retrieve products from outside this region.")
+st.sidebar.info(f"Metadata Filtering active. You are physically locked into the **{country_selection}** catalog. It is mathematically impossible to retrieve products from outside this region.")
 
 # Initialize the modern Pinecone Client (v4.0.0+)
 # This client natively supports Serverless Inference without manual HTTP requests!
@@ -74,7 +74,7 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
+if prompt_text := st.chat_input("Ask about a product, ID, or specifications..."):
     # Render user prompt
     st.session_state.messages.append({"role": "user", "content": prompt_text})
     with st.chat_message("user"):
@@ -85,7 +85,6 @@ if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
         with st.spinner("Executing secure retrieval via Pinecone Inference..."):
             try:
                 # 1. Embed query using official Pinecone Inference SDK (v4.0.0+)
-                # This guarantees zero bugs with HTTP headers or formatting
                 embed_response = pc.inference.embed(
                     model="multilingual-e5-large",
                     inputs=[prompt_text],
@@ -103,7 +102,7 @@ if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
                     top_k=5,
                     include_metadata=True,
                     filter={
-                        "country": {"$eq": country_code}
+                        "country": {"$eq": country_selection}
                     }
                 )
                 
@@ -114,8 +113,9 @@ if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
                     # We EXPLICITLY strip out 'internal_notes' here before the LLM ever sees it.
                     if meta.get("doc_type") == "product":
                         safe_context_parts.append(
-                            f"Product: {meta.get('name', 'Unknown')} | SKU: {meta.get('sku', 'Unknown')} | "
-                            f"Price: {meta.get('currency', 'USD')} {meta.get('price', '0.00')} | Desc: {meta.get('description', '')}"
+                            f"Product: {meta.get('name', 'Unknown')} | ID: {meta.get('product_id', 'Unknown')} | "
+                            f"Category: {meta.get('category', 'Unknown')} | "
+                            f"Price: {meta.get('currency', '')} {meta.get('price', '0.00')} | Specs: {meta.get('specs', '')}"
                         )
                     else:
                         safe_context_parts.append(f"Policy: {meta.get('title', 'Policy')} | Detail: {meta.get('content', '')}")
@@ -123,14 +123,14 @@ if prompt_text := st.chat_input("Ask about a product, SKU, or policy..."):
                 context_str = "\n".join(safe_context_parts)
                 
                 if not context_str:
-                    final_response = f"I could not find any relevant information for your query in the **{country_code}** region."
+                    final_response = f"I could not find any relevant information for your query in the **{country_selection}** region."
                 else:
                     # 4. Generate Answer via LangChain + OpenRouter
                     prompt_template = PromptTemplate.from_template(SYS_PROMPT)
                     chain = prompt_template | llm
                     
                     resp = chain.invoke({
-                        "country": country_code,
+                        "country": country_selection,
                         "context": context_str,
                         "question": prompt_text
                     })

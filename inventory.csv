@@ -1,0 +1,8 @@
+id,doc_type,country,name,sku,price,currency,description,internal_notes,title,content
+prod-gh-001,product,GH,Solar Inverter 5kW,GH-INV-5000,12500.00,GHS,High-efficiency 5kW Solar Inverter for residential use. Pure sine wave.,"Supplier: AccraTech Energy. Margin: 45%. Contact: Kwame Doe (kwame@accratech.com)",,
+policy-gh-001,policy,GH,,,,,,,"Ghana Electronics Warranty","All electronics in Ghana come with a standard 1-year manufacturer warranty covering factory defects. Power surges are not covered."
+prod-za-001,product,ZA,Solar Inverter 5kW,ZA-INV-5000,18000.00,ZAR,High-efficiency 5kW Solar Inverter. Built for load shedding resilience.,"Supplier: Jozi Solar. Margin: 30%. Contact: Johan (johan@jozisolar.za)",,
+prod-nl-001,product,NL,Dutch Master Bike Light,NL-L-5042,45.00,EUR,Ultra-bright LED bike light with USB-C charging. 500 lumens.,"Supplier: EuroBike Corp. Margin: 60%. PII: ceo@eurobike.nl",,
+policy-nl-001,policy,NL,,,,,,,"Netherlands Electronics Warranty","By EU law, all electronics sold in the Netherlands carry a mandatory 2-year warranty covering all functional defects."
+prod-ke-001,product,KE,Smart Kettle Pro,KE-KTL-99,4500.00,KES,Wifi-enabled smart kettle. Boil water via app.,"Supplier: Nairobi Home Goods. Margin: 55%. Factory contact: +254 700 000000",,
+prod-us-001,product,US,Generic Retail Item,US-GEN-1,25.99,USD,Standard retail item for US market.,"Standard margin 20%.",,

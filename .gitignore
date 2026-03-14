@@ -1,0 +1,27 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment Variables
+.env
+.env.local
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE / OS Files
+.vscode/
+.idea/
+.DS_Store
+
+# Streamlit
+.streamlit/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/

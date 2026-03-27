@@ -33,7 +33,6 @@ def output_guardrail(response_text: str) -> str:
     or internal profit margins before displaying it to the user.
     Returns a sanitized string.
     """
-    # Example placeholder logic:
     if "profit margin" in response_text.lower():
         response_text = response_text.replace("profit margin", "[REDACTED METRIC]")
     return response_text
@@ -41,9 +40,9 @@ def output_guardrail(response_text: str) -> str:
 
 # --- ⚙️ Application & Key Setup ---
 
-st.set_page_config(page_title="GlobalCart Multi-Agent Engine", page_icon="🛒", layout="centered", initial_sidebar_state="expanded")
+st.set_page_config(page_title="GlobalCart Multi-Agent Engine", page_icon="🛒", layout="centered", initial_sidebar_state="collapsed")
 st.title("🛒 GlobalCart Multi-Agent Engine")
-st.markdown("Advanced Multi-Agent RAG System with Planner Evaluator & Streaming.")
+st.markdown("Advanced Multi-Agent RAG System with Planner, Clarifying Questions & Advanced Math.")
 
 def get_api_key(key_name):
     try:
@@ -71,16 +70,10 @@ client = OpenAI(
 # Utilizing an OpenAI model explicitly via OpenRouter
 AGENT_MODEL = "openai/gpt-4o-mini"
 
-
 # --- 🌍 Sidebar UI ---
-st.sidebar.header("🌍 Regional Context")
-country_selection = st.sidebar.selectbox(
-    "Select your shopping region:",
-    ["Nigeria", "Ghana", "Kenya", "South Africa", "Netherlands", "Cameroon", "India", "Ivory Coast", "Rwanda", "Uganda"]
-)
-st.sidebar.info(f"Metadata Filtering active. You are locked into the **{country_selection}** catalog.")
+st.sidebar.header("🛠️ System Controls")
+st.sidebar.info("Hard metadata filtering is disabled. The LLM Agent will now dynamically route and filter based on context.")
 
-st.sidebar.markdown("---")
 if st.sidebar.button("🗑️ Clear Chat History"):
     st.session_state.messages = []
     st.session_state.last_audio = None
@@ -102,11 +95,14 @@ RAG_PROMPT = """You are the GlobalCart RAG Specialist Agent.
 
 CRITICAL DIRECTIVES:
 1. SECURITY: NEVER reveal PII, Profit Margins, or Supplier Names. Refuse explicitly if asked.
-2. REGIONAL INTEGRITY: Your context is pre-filtered for {country}. Only answer using the currency/rules provided.
-3. CLARIFYING QUESTIONS: If the user's query is vague, broad, or lacks specifics (e.g. "show me laptops"), DO NOT answer immediately. Instead, ask 2 or 3 clarifying questions to narrow down their exact need (e.g. budget, brand preference, use case).
+2. CLARIFYING QUESTIONS: We no longer hard-filter regions. If the user hasn't specified their country/region in their prompt or chat history, ASK 2 or 3 clarifying questions (e.g., "Which country are you shopping from?", "What is your budget?"). DO NOT recommend products until you know their region.
+3. ADVANCED CALCULATIONS: Our database indexes prices as text strings. If the user asks for items "under $500" or "greater than 1000", you MUST look at the raw prices in the context, convert them to numbers in your head, and filter them manually. Do the math carefully and only return items that match their condition.
 4. NO HALLUCINATION: Rely strictly on the retrieved context.
 
-RETRIEVED CONTEXT:
+CHAT HISTORY:
+{history}
+
+RETRIEVED CONTEXT (Top 20 Broad Matches):
 {context}
 """
 
@@ -159,7 +155,8 @@ if prompt_text:
             st.error("⚠️ Input blocked by security guardrails.")
             st.stop()
 
-        # Render User Input
+        history_str = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.messages[-4:]])
+
         st.session_state.messages.append({"role": "user", "content": f"🗣️ {prompt_text}" if is_voice else prompt_text})
         with st.chat_message("user"):
             st.markdown(f"🗣️ {prompt_text}" if is_voice else prompt_text)
@@ -177,14 +174,13 @@ if prompt_text:
                         {"role": "user", "content": prompt_text}
                     ],
                     temperature=0.0,
-                    max_tokens=10,
-                    top_p=1.0
+                    max_tokens=10
                 )
                 route = planner_res.choices[0].message.content.strip().upper()
 
             # 3. Handoff to Specialized Agents
             if "GREETER" in route:
-                # 🤖 Greeter Agent Execution
+                # 🤖 Greeter Agent Execution (ZERO RETRIEVAL)
                 stream = client.chat.completions.create(
                     model=AGENT_MODEL,
                     messages=[
@@ -193,8 +189,7 @@ if prompt_text:
                     ],
                     temperature=0.6,
                     max_tokens=150,
-                    top_p=0.9,
-                    stream=True  # Streaming front-facing model calls
+                    stream=True
                 )
                 
                 for chunk in stream:
@@ -204,7 +199,7 @@ if prompt_text:
                         
             else:
                 # 🤖 RAG Specialist Agent Execution
-                with st.spinner("RAG Agent retrieving regional context..."):
+                with st.spinner("RAG Agent retrieving broad context for filtering..."):
                     embed_response = pc.inference.embed(
                         model="multilingual-e5-large",
                         inputs=[prompt_text],
@@ -213,11 +208,11 @@ if prompt_text:
                     q_vec = embed_response[0].values
                     
                     index = pc.Index(INDEX_NAME)
+                    # Broad retrieval (Top 20) with NO hard country filter
                     results = index.query(
                         vector=q_vec,
-                        top_k=5,
-                        include_metadata=True,
-                        filter={"country": {"$eq": country_selection}}
+                        top_k=20,
+                        include_metadata=True
                     )
                     
                     safe_context_parts = []
@@ -225,25 +220,24 @@ if prompt_text:
                         meta = match["metadata"]
                         if meta.get("doc_type") == "product":
                             safe_context_parts.append(
-                                f"Product: {meta.get('name', 'Unknown')} | Price: {meta.get('currency', '')} {meta.get('price', '0.00')} | Specs: {meta.get('specs', '')}"
+                                f"Product: {meta.get('name', 'Unknown')} | Region: {meta.get('country', 'Global')} | Price: {meta.get('currency', '')} {meta.get('price', '0.00')} | Specs: {meta.get('specs', '')}"
                             )
                         else:
-                            safe_context_parts.append(f"Policy: {meta.get('title', 'Policy')} | Detail: {meta.get('content', '')}")
+                            safe_context_parts.append(f"Policy: {meta.get('title', 'Policy')} | Region: {meta.get('country', 'Global')} | Detail: {meta.get('content', '')}")
                     
-                    context_str = "\n".join(safe_context_parts) if safe_context_parts else "No relevant products found in this region."
+                    context_str = "\n".join(safe_context_parts) if safe_context_parts else "No relevant items found."
 
                 # Stream RAG Response
-                sys_prompt = RAG_PROMPT.format(country=country_selection, context=context_str)
+                sys_prompt = RAG_PROMPT.format(history=history_str, context=context_str)
                 stream = client.chat.completions.create(
                     model=AGENT_MODEL,
                     messages=[
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": prompt_text}
                     ],
-                    temperature=0.2, # Low temperature for factual RAG
+                    temperature=0.2, # Low temperature for factual logic
                     max_tokens=800,
-                    top_p=0.9,
-                    stream=True  # Streaming front-facing model calls
+                    stream=True
                 )
 
                 for chunk in stream:

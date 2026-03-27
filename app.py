@@ -67,7 +67,6 @@ client = OpenAI(
     api_key=OPENROUTER_API_KEY
 )
 
-# Utilizing an OpenAI model explicitly via OpenRouter
 AGENT_MODEL = "openai/gpt-4o-mini"
 
 # --- 🌍 Sidebar UI ---
@@ -76,7 +75,8 @@ st.sidebar.info("Hard metadata filtering is disabled. The LLM Agent will now dyn
 
 if st.sidebar.button("🗑️ Clear Chat History"):
     st.session_state.messages = []
-    st.session_state.last_audio = None
+    if "audio_key" in st.session_state:
+        st.session_state.audio_key += 1
     st.rerun()
 
 
@@ -110,8 +110,8 @@ RETRIEVED CONTEXT (Top 20 Broad Matches):
 # --- 💬 Chat UI State Management ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "last_audio" not in st.session_state:
-    st.session_state.last_audio = None
+if "audio_key" not in st.session_state:
+    st.session_state.audio_key = 0
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -120,19 +120,20 @@ for msg in st.session_state.messages:
             st.audio(msg["audio_bytes"], format="audio/mp3")
 
 
-# --- 🎤 Input Handling ---
+# --- 🎤 Input Handling (Repeatable Voice & Text) ---
 prompt_text = None
 is_voice = False
 
+# We dock the audio input right above the chat input.
+# By using a dynamic key (audio_key), we can FORCE the widget to clear itself after every message.
 if hasattr(st, "audio_input"):
-    audio_value = st.audio_input("Speak to GlobalCart Agents")
+    audio_value = st.audio_input("🎙️ Speak your message", key=f"voice_input_{st.session_state.audio_key}")
 else:
-    audio_value = st.file_uploader("Upload or Record Audio", type=["wav", "mp3", "m4a"], accept_multiple_files=False)
+    audio_value = st.file_uploader("Upload or Record Audio", type=["wav", "mp3", "m4a"], accept_multiple_files=False, key=f"voice_input_{st.session_state.audio_key}")
 
 text_input = st.chat_input("Or type your question...")
 
-if audio_value and audio_value != st.session_state.last_audio:
-    st.session_state.last_audio = audio_value
+if audio_value:
     with st.spinner("Transcribing audio..."):
         try:
             r = sr.Recognizer()
@@ -141,7 +142,7 @@ if audio_value and audio_value != st.session_state.last_audio:
                 prompt_text = r.recognize_google(audio_data)
                 is_voice = True
         except Exception as e:
-            st.error(f"Could not transcribe audio: {e}")
+            st.error(f"Could not transcribe audio. Please try again. ({e})")
 elif text_input:
     prompt_text = text_input
     is_voice = False
@@ -208,7 +209,6 @@ if prompt_text:
                     q_vec = embed_response[0].values
                     
                     index = pc.Index(INDEX_NAME)
-                    # Broad retrieval (Top 20) with NO hard country filter
                     results = index.query(
                         vector=q_vec,
                         top_k=20,
@@ -235,7 +235,7 @@ if prompt_text:
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": prompt_text}
                     ],
-                    temperature=0.2, # Low temperature for factual logic
+                    temperature=0.2, 
                     max_tokens=800,
                     stream=True
                 )
@@ -267,7 +267,11 @@ if prompt_text:
                 "audio_bytes": tts_bytes
             })
 
+            # 6. RESET THE VOICE WIDGET FOR INFINITE REPEATABILITY
+            if is_voice:
+                st.session_state.audio_key += 1
+                st.rerun()
+
     except Exception as e:
-        # Exception handling as requested
         st.error(f"⚠️ Multi-Agent System Error: {str(e)}")
 

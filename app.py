@@ -2,6 +2,9 @@ import streamlit as st
 import os
 import time
 import io
+from openai import OpenAI
+from pinecone import Pinecone
+
 try:
     import speech_recognition as sr
     from gtts import gTTS
@@ -9,17 +12,39 @@ except ImportError:
     st.error("Please run: pip install SpeechRecognition gTTS pydub")
     st.stop()
 
-from pinecone import Pinecone
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import PromptTemplate
+# --- 🛡️ Guardrail Definitions ---
 
-# Configure Streamlit UI
-st.set_page_config(page_title="GlobalCart AI Engine", page_icon="🛒", layout="centered", initial_sidebar_state="expanded")
+def input_guardrail(prompt_text: str) -> bool:
+    """
+    STUB: Input Guardrail Evaluator.
+    Intended to intercept malicious prompts, prompt injections, or prohibited queries 
+    before they reach any agent.
+    Returns False if the input is deemed unsafe.
+    """
+    restricted_keywords = ["ignore previous instructions", "system prompt", "bypass"]
+    if any(keyword in prompt_text.lower() for keyword in restricted_keywords):
+        return False
+    return True
 
-st.title("🛒 GlobalCart Intelligence Engine")
-st.markdown("Advanced Retail RAG System with Strict Regional & Security Guardrails.")
+def output_guardrail(response_text: str) -> str:
+    """
+    STUB: Output Guardrail Filter.
+    Intended to scan the generated agent response for PII, supplier leaks, 
+    or internal profit margins before displaying it to the user.
+    Returns a sanitized string.
+    """
+    # Example placeholder logic:
+    if "profit margin" in response_text.lower():
+        response_text = response_text.replace("profit margin", "[REDACTED METRIC]")
+    return response_text
 
-# Robust API Key Fetcher
+
+# --- ⚙️ Application & Key Setup ---
+
+st.set_page_config(page_title="GlobalCart Multi-Agent Engine", page_icon="🛒", layout="centered", initial_sidebar_state="expanded")
+st.title("🛒 GlobalCart Multi-Agent Engine")
+st.markdown("Advanced Multi-Agent RAG System with Planner Evaluator & Streaming.")
+
 def get_api_key(key_name):
     try:
         if key_name in st.secrets:
@@ -33,25 +58,27 @@ OPENROUTER_API_KEY = get_api_key("OPENROUTER_API_KEY")
 INDEX_NAME = "globalcart-retail-engine"
 
 if not PINECONE_API_KEY or not OPENROUTER_API_KEY:
-    st.error("Missing API Keys! Please set PINECONE_API_KEY and OPENROUTER_API_KEY in the Streamlit App Settings (Secrets) or locally.")
+    st.error("Missing API Keys! Please set PINECONE_API_KEY and OPENROUTER_API_KEY.")
     st.stop()
 
-# Initialize Clients
+# Initialize Clients (Using Official OpenAI SDK mapped to OpenRouter)
 pc = Pinecone(api_key=PINECONE_API_KEY)
-llm = ChatOpenAI(
+client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-    model="meta-llama/llama-3.1-8b-instruct",
-    temperature=0.0
+    api_key=OPENROUTER_API_KEY
 )
 
-# --- Sidebar: Regional Context & Reset ---
+# Utilizing an OpenAI model explicitly via OpenRouter
+AGENT_MODEL = "openai/gpt-4o-mini"
+
+
+# --- 🌍 Sidebar UI ---
 st.sidebar.header("🌍 Regional Context")
 country_selection = st.sidebar.selectbox(
     "Select your shopping region:",
     ["Nigeria", "Ghana", "Kenya", "South Africa", "Netherlands", "Cameroon", "India", "Ivory Coast", "Rwanda", "Uganda"]
 )
-st.sidebar.info(f"Metadata Filtering active. You are physically locked into the **{country_selection}** catalog.")
+st.sidebar.info(f"Metadata Filtering active. You are locked into the **{country_selection}** catalog.")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🗑️ Clear Chat History"):
@@ -59,52 +86,50 @@ if st.sidebar.button("🗑️ Clear Chat History"):
     st.session_state.last_audio = None
     st.rerun()
 
-SYS_PROMPT = """You are the GlobalCart AI Assistant. 
-You provide extremely precise, helpful answers based strictly on the provided context and prior conversation.
+
+# --- 🤖 Multi-Agent Prompts ---
+
+PLANNER_PROMPT = """You are the GlobalCart Planner Evaluator. 
+Analyze the user's input. If it is a simple greeting, pleasantry, or small talk, output EXACTLY the word 'GREETER'. 
+If it is a substantive question about products, prices, policies, or retail, output EXACTLY the word 'RAG'.
+Output nothing else."""
+
+GREETER_PROMPT = """You are a direct, helpful greeting assistant. 
+Do NOT introduce yourself or say 'I am an AI'. Do NOT offer your name.
+Simply acknowledge the user's greeting politely and ask how you can assist them with GlobalCart today."""
+
+RAG_PROMPT = """You are the GlobalCart RAG Specialist Agent.
 
 CRITICAL DIRECTIVES:
-1. SECURITY: You MUST NEVER reveal PII (Names, Emails, Phone Numbers), Profit Margins, or Supplier Names. If a user asks for internal or private data, explicitly refuse to answer.
-2. REGIONAL INTEGRITY: The context is pre-filtered for the user's country. Only answer using the currency and rules in the context.
-3. CONVERSATIONAL MEMORY: Use the 'Chat History' below to answer follow-up questions seamlessly.
-4. NO HALLUCINATION: Never invent a price or specification.
-
-USER COUNTRY: {country}
-
-CHAT HISTORY:
-{history}
+1. SECURITY: NEVER reveal PII, Profit Margins, or Supplier Names. Refuse explicitly if asked.
+2. REGIONAL INTEGRITY: Your context is pre-filtered for {country}. Only answer using the currency/rules provided.
+3. CLARIFYING QUESTIONS: If the user's query is vague, broad, or lacks specifics (e.g. "show me laptops"), DO NOT answer immediately. Instead, ask 2 or 3 clarifying questions to narrow down their exact need (e.g. budget, brand preference, use case).
+4. NO HALLUCINATION: Rely strictly on the retrieved context.
 
 RETRIEVED CONTEXT:
 {context}
-
-QUESTION: {question}
-
-ANSWER:
 """
 
-# --- Chat UI State Management ---
+
+# --- 💬 Chat UI State Management ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_audio" not in st.session_state:
     st.session_state.last_audio = None
 
-# Render existing messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("audio_bytes"):
             st.audio(msg["audio_bytes"], format="audio/mp3")
-        if msg.get("context_data"):
-            with st.expander("🔍 View Retrieved Sources"):
-                for src in msg["context_data"]:
-                    st.code(src, language="json")
 
-# --- Input Handling (Voice & Text) ---
+
+# --- 🎤 Input Handling ---
 prompt_text = None
 is_voice = False
 
-# Fallback for older Streamlit versions without st.audio_input
 if hasattr(st, "audio_input"):
-    audio_value = st.audio_input("Speak to GlobalCart Assistant")
+    audio_value = st.audio_input("Speak to GlobalCart Agents")
 else:
     audio_value = st.file_uploader("Upload or Record Audio", type=["wav", "mp3", "m4a"], accept_multiple_files=False)
 
@@ -115,107 +140,140 @@ if audio_value and audio_value != st.session_state.last_audio:
     with st.spinner("Transcribing audio..."):
         try:
             r = sr.Recognizer()
-            # Convert uploaded/recorded audio to AudioFile
             with sr.AudioFile(audio_value) as source:
                 audio_data = r.record(source)
                 prompt_text = r.recognize_google(audio_data)
                 is_voice = True
         except Exception as e:
             st.error(f"Could not transcribe audio: {e}")
-
 elif text_input:
     prompt_text = text_input
     is_voice = False
 
-# --- RAG Execution ---
+
+# --- 🧠 Multi-Agent Execution Flow ---
 if prompt_text:
-    history_str = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.messages[-4:]])
-    
-    # Show user prompt
-    st.session_state.messages.append({"role": "user", "content": f"🗣️ {prompt_text}" if is_voice else prompt_text})
-    with st.chat_message("user"):
-        st.markdown(f"🗣️ {prompt_text}" if is_voice else prompt_text)
+    try:
+        # 1. Evaluate Input Guardrails
+        if not input_guardrail(prompt_text):
+            st.error("⚠️ Input blocked by security guardrails.")
+            st.stop()
 
-    # Assistant Response
-    with st.chat_message("assistant"):
-        with st.spinner("Executing secure retrieval & generation..."):
-            try:
-                # 1. Embed query
-                embed_response = pc.inference.embed(
-                    model="multilingual-e5-large",
-                    inputs=[prompt_text],
-                    parameters={"input_type": "query", "truncate": "END"}
+        # Render User Input
+        st.session_state.messages.append({"role": "user", "content": f"🗣️ {prompt_text}" if is_voice else prompt_text})
+        with st.chat_message("user"):
+            st.markdown(f"🗣️ {prompt_text}" if is_voice else prompt_text)
+
+        with st.chat_message("assistant"):
+            response_placeholder = st.empty()
+            full_response = ""
+            
+            # 2. Planner Evaluator Agent (Routing)
+            with st.spinner("Planner Evaluator analyzing intent..."):
+                planner_res = client.chat.completions.create(
+                    model=AGENT_MODEL,
+                    messages=[
+                        {"role": "system", "content": PLANNER_PROMPT},
+                        {"role": "user", "content": prompt_text}
+                    ],
+                    temperature=0.0,
+                    max_tokens=10,
+                    top_p=1.0
                 )
-                q_vec = embed_response[0].values
-                
-                # 2. Hard Metadata Filter on Retrieval
-                index = pc.Index(INDEX_NAME)
-                results = index.query(
-                    vector=q_vec,
-                    top_k=5,
-                    include_metadata=True,
-                    filter={"country": {"$eq": country_selection}}
+                route = planner_res.choices[0].message.content.strip().upper()
+
+            # 3. Handoff to Specialized Agents
+            if "GREETER" in route:
+                # 🤖 Greeter Agent Execution
+                stream = client.chat.completions.create(
+                    model=AGENT_MODEL,
+                    messages=[
+                        {"role": "system", "content": GREETER_PROMPT},
+                        {"role": "user", "content": prompt_text}
+                    ],
+                    temperature=0.6,
+                    max_tokens=150,
+                    top_p=0.9,
+                    stream=True  # Streaming front-facing model calls
                 )
                 
-                # 3. Construct Safe Context
-                safe_context_parts = []
-                raw_sources = []
-                for match in results["matches"]:
-                    meta = match["metadata"]
-                    clean_meta = {k: v for k, v in meta.items() if k.lower() != "internal_notes"}
-                    raw_sources.append(f"Score: {match['score']:.2f}\n{clean_meta}")
-                    
-                    if meta.get("doc_type") == "product":
-                        safe_context_parts.append(
-                            f"Product: {meta.get('name', 'Unknown')} | ID: {meta.get('product_id', 'Unknown')} | "
-                            f"Category: {meta.get('category', 'Unknown')} | "
-                            f"Price: {meta.get('currency', '')} {meta.get('price', '0.00')} | Specs: {meta.get('specs', '')}"
-                        )
-                    else:
-                        safe_context_parts.append(f"Policy: {meta.get('title', 'Policy')} | Detail: {meta.get('content', '')}")
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        full_response += chunk.choices[0].delta.content
+                        response_placeholder.markdown(full_response + "▌")
                         
-                context_str = "\n".join(safe_context_parts)
-                
-                if not context_str:
-                    final_response = f"I could not find any relevant information for your query in the **{country_selection}** region catalog."
-                else:
-                    # 4. Generate Answer
-                    prompt_template = PromptTemplate.from_template(SYS_PROMPT)
-                    chain = prompt_template | llm
+            else:
+                # 🤖 RAG Specialist Agent Execution
+                with st.spinner("RAG Agent retrieving regional context..."):
+                    embed_response = pc.inference.embed(
+                        model="multilingual-e5-large",
+                        inputs=[prompt_text],
+                        parameters={"input_type": "query", "truncate": "END"}
+                    )
+                    q_vec = embed_response[0].values
                     
-                    resp = chain.invoke({
-                        "country": country_selection,
-                        "history": history_str,
-                        "context": context_str,
-                        "question": prompt_text
-                    })
-                    final_response = resp.content
-                
-                st.markdown(final_response)
-                
-                # Generate TTS if voice was used
-                tts_bytes = None
-                if is_voice:
-                    with st.spinner("Generating voice response..."):
-                        tts = gTTS(text=final_response, lang='en', tld='com')
-                        fp = io.BytesIO()
-                        tts.write_to_fp(fp)
-                        fp.seek(0)
-                        tts_bytes = fp.read()
-                        st.audio(tts_bytes, format="audio/mp3")
+                    index = pc.Index(INDEX_NAME)
+                    results = index.query(
+                        vector=q_vec,
+                        top_k=5,
+                        include_metadata=True,
+                        filter={"country": {"$eq": country_selection}}
+                    )
+                    
+                    safe_context_parts = []
+                    for match in results["matches"]:
+                        meta = match["metadata"]
+                        if meta.get("doc_type") == "product":
+                            safe_context_parts.append(
+                                f"Product: {meta.get('name', 'Unknown')} | Price: {meta.get('currency', '')} {meta.get('price', '0.00')} | Specs: {meta.get('specs', '')}"
+                            )
+                        else:
+                            safe_context_parts.append(f"Policy: {meta.get('title', 'Policy')} | Detail: {meta.get('content', '')}")
+                    
+                    context_str = "\n".join(safe_context_parts) if safe_context_parts else "No relevant products found in this region."
 
-                if raw_sources:
-                    with st.expander("🔍 View Retrieved Sources"):
-                        for src in raw_sources:
-                            st.code(src, language="json")
-                
-                # Save to state
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": final_response,
-                    "audio_bytes": tts_bytes,
-                    "context_data": raw_sources if raw_sources else None
-                })
-                
-            except Exception as e:
-                st.error(f"Error during execution: {str(e)}")
+                # Stream RAG Response
+                sys_prompt = RAG_PROMPT.format(country=country_selection, context=context_str)
+                stream = client.chat.completions.create(
+                    model=AGENT_MODEL,
+                    messages=[
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": prompt_text}
+                    ],
+                    temperature=0.2, # Low temperature for factual RAG
+                    max_tokens=800,
+                    top_p=0.9,
+                    stream=True  # Streaming front-facing model calls
+                )
+
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        full_response += chunk.choices[0].delta.content
+                        response_placeholder.markdown(full_response + "▌")
+
+            # 4. Evaluate Output Guardrails
+            full_response = output_guardrail(full_response)
+            response_placeholder.markdown(full_response)
+
+            # 5. Optional TTS for Voice Input
+            tts_bytes = None
+            if is_voice:
+                with st.spinner("Generating voice response..."):
+                    tts = gTTS(text=full_response, lang='en', tld='com')
+                    fp = io.BytesIO()
+                    tts.write_to_fp(fp)
+                    fp.seek(0)
+                    tts_bytes = fp.read()
+                    st.audio(tts_bytes, format="audio/mp3")
+
+            # Save state
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": full_response,
+                "audio_bytes": tts_bytes
+            })
+
+    except Exception as e:
+        # Exception handling as requested
+        st.error(f"⚠️ Multi-Agent System Error: {str(e)}")
+

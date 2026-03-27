@@ -1,7 +1,6 @@
 streamlit>=1.32.0
 pinecone>=4.0.0
-langchain-openai>=0.1.0
-langchain-core>=0.1.0
+openai>=1.14.0
 SpeechRecognition
 gTTS
 pydub

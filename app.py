@@ -4,15 +4,16 @@ import time
 import io
 import uuid
 import pandas as pd
+import asyncio
 from openai import OpenAI
 from pinecone import Pinecone
-from swarm import Swarm, Agent
+from openai_agents import Agent, Runner
 
 try:
     import speech_recognition as sr
     from gtts import gTTS
 except ImportError:
-    st.error("Please run: uv pip install SpeechRecognition gTTS pydub pandas")
+    st.error("Missing audio dependencies. Please run pip install SpeechRecognition gTTS pydub")
     st.stop()
 
 # --- ⚙️ Application & Data Setup ---
@@ -25,13 +26,13 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "swarm_history" not in st.session_state:
-    st.session_state.swarm_history = []
+if "agent_messages" not in st.session_state:
+    st.session_state.agent_messages = []
 if "audio_key" not in st.session_state:
     st.session_state.audio_key = 0
 
 st.sidebar.markdown(f"**Thread ID:** `{st.session_state.thread_id}`")
-st.markdown("Multi-Agent Architecture Powered by OpenAI Swarm.")
+st.markdown("Multi-Agent Architecture Powered by **openai-agents-sdk**.")
 
 def get_api_key(key_name):
     try:
@@ -55,7 +56,6 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY
 )
-swarm_client = Swarm(client=client)
 
 AGENT_MODEL = "google/gemini-2.0-flash-001"
 
@@ -75,22 +75,18 @@ def load_data():
 
 df_global = load_data()
 
-# --- 🤖 Swarm Agent Functions ---
+# --- 🤖 Agent Handlers ---
 
-def run_pandas_query(query_expression: str):
-    """
-    Executes a read-only pandas expression against the global inventory.
-    """
+def run_pandas_query(query_expression: str) -> str:
+    """Executes a read-only pandas expression against the global inventory."""
     try:
         result = eval(query_expression, {"__builtins__": {}}, {"df": df_global})
         return str(result)
     except Exception as e:
         return f"Query Error: {str(e)}"
 
-def retrieve_retail_knowledge(query: str):
-    """
-    Retrieves semantic context from the retail vector database (Pinecone).
-    """
+def retrieve_retail_knowledge(query: str) -> str:
+    """Retrieves semantic context from the retail vector database (Pinecone)."""
     try:
         embed_response = pc.inference.embed(
             model="multilingual-e5-large",
@@ -108,51 +104,47 @@ def retrieve_retail_knowledge(query: str):
                 parts.append(f"Product: {meta.get('name')} | Price: {meta.get('price')} | Specs: {meta.get('specs')}")
             else:
                 parts.append(f"Policy: {meta.get('title')} | Detail: {meta.get('content')}")
-        return "\n".join(parts) if parts else "No specific matches found in knowledge base."
+        return "\n".join(parts) if parts else "No specific matches found."
     except Exception as e:
         return f"RAG Error: {str(e)}"
 
-# --- 🤖 Swarm Agent Definitions ---
+# --- 🤖 openai-agents-sdk Definitions ---
 
 data_analyst = Agent(
     name="Data Analyst",
-    instructions="""You are the GlobalCart Data Analyst. 
-    Translate user questions into read-only pandas expressions. 
+    instructions="""You are the GlobalCart Data Analyst. Translate user questions into read-only pandas expressions. 
     The dataframe is named 'df'. Columns: Product_ID, Country, Category, Item_Name, Price_Local, Currency, Technical_Specs.
-    Return ONLY the result of the function 'run_pandas_query'. 
-    If the user hasn't specified a country, ask them first unless the query is global.""",
-    functions=[run_pandas_query],
+    Always execute 'run_pandas_query' and return the result.""",
+    tools=[run_pandas_query],
     model=AGENT_MODEL
 )
 
 rag_specialist = Agent(
     name="RAG Specialist",
-    instructions="""You are the GlobalCart Semantic Specialist. 
-    Use 'retrieve_retail_knowledge' to answer questions about product features, specs, and store policies.
-    If the user asks for prices across multiple items or math, handoff to the Data Analyst.""",
-    functions=[retrieve_retail_knowledge],
+    instructions="""You are the GlobalCart Semantic Specialist. Use 'retrieve_retail_knowledge' to answer questions 
+    about product features, specs, and policies. If numerical comparisons are needed, handoff to Data Analyst.""",
+    tools=[retrieve_retail_knowledge],
     model=AGENT_MODEL
 )
 
 planner_agent = Agent(
     name="GlobalCart Planner",
     instructions="""You are the lead orchestrator for GlobalCart.
-    Your job is to coordinate between the Data Analyst and the RAG Specialist.
-    1. Greeting: Handle politely yourself.
-    2. Numerical/Math/Comparisons: Transfer to Data Analyst.
-    3. General Knowledge/Specs/Policy: Transfer to RAG Specialist.
-    4. MANDATORY: You MUST maintain conversation history. If the user already told you their country, don't ask again.
-    5. IDENTITY: You are a professional retail intelligence system. No robotic slop. You are Samuel Kalu. Sign off ONLY with 'Samuel Kalu'.""",
+    1. Greeting: Handle yourself.
+    2. Numerical/Math/Country Comparisons: Handoff to Data Analyst.
+    3. Knowledge/Specs/Policy: Handoff to RAG Specialist.
+    4. PERSISTENCE: You MUST remember the conversation history. If the user already stated their country, use that context.
+    5. IDENTITY: You are Samuel Kalu. Sign off ONLY with 'Samuel Kalu'.""",
     model=AGENT_MODEL
 )
 
-def transfer_to_analyst(): return data_analyst
-def transfer_to_rag(): return rag_specialist
+# Define Handoffs
+def transfer_to_analyst() -> Agent: return data_analyst
+def transfer_to_rag() -> Agent: return rag_specialist
 
-planner_agent.functions = [transfer_to_analyst, transfer_to_rag]
+planner_agent.tools.extend([transfer_to_analyst, transfer_to_rag])
 
 # --- 💬 Chat UI ---
-# Fixed history loop to include audio playback buttons for assistant responses
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -182,40 +174,48 @@ if audio_value:
 elif text_input:
     prompt_text = text_input
 
-# --- 🚀 Swarm Execution ---
+# --- 🚀 Runner Execution ---
+async def run_agents(text):
+    runner = Runner(client=client)
+    # Append user message to history
+    st.session_state.agent_messages.append({"role": "user", "content": text})
+    
+    result = await runner.run(
+        agent=planner_agent,
+        messages=st.session_state.agent_messages
+    )
+    return result
+
 if prompt_text:
-    display_user_msg = f"🗣️ {prompt_text}" if is_voice else prompt_text
-    st.session_state.messages.append({"role": "user", "content": display_user_msg})
-    st.session_state.swarm_history.append({"role": "user", "content": prompt_text})
+    display_msg = f"🗣️ {prompt_text}" if is_voice else prompt_text
+    st.session_state.messages.append({"role": "user", "content": display_msg})
     
     with st.chat_message("user"):
-        st.markdown(display_user_msg)
+        st.markdown(display_msg)
 
     with st.chat_message("assistant"):
-        with st.spinner("GlobalCart Brain Thinking..."):
-            response = swarm_client.run(
-                agent=planner_agent,
-                messages=st.session_state.swarm_history
-            )
+        with st.spinner("Processing through Agents SDK..."):
+            # Using asyncio to run the SDK runner
+            res = asyncio.run(run_agents(prompt_text))
             
-            full_response = response.messages[-1]["content"]
-            st.session_state.swarm_history = response.messages
+            # Update internal agent history
+            st.session_state.agent_messages = res.messages
+            
+            # The final response is the content of the last assistant message
+            full_response = res.messages[-1]["content"]
             st.markdown(full_response)
             
-            # Generate and store TTS audio
             audio_bytes = None
             if is_voice:
-                with st.spinner("Generating voice response..."):
+                with st.spinner("Generating voice..."):
                     tts = gTTS(text=full_response, lang='en')
                     fp = io.BytesIO()
                     tts.write_to_fp(fp)
                     audio_bytes = fp.getvalue()
                     st.audio(audio_bytes, format="audio/mp3")
 
-            # Save full state including audio to messages history
             msg_entry = {"role": "assistant", "content": full_response}
-            if audio_bytes:
-                msg_entry["audio"] = audio_bytes
+            if audio_bytes: msg_entry["audio"] = audio_bytes
             st.session_state.messages.append(msg_entry)
 
             if is_voice:

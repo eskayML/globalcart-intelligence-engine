@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import time
 import io
+import uuid
 import pandas as pd
 from openai import OpenAI
 from pinecone import Pinecone
@@ -18,6 +19,19 @@ except ImportError:
 
 st.set_page_config(page_title="GlobalCart Multi-Agent Engine", page_icon="🛒", layout="centered", initial_sidebar_state="collapsed")
 st.title("🛒 GlobalCart Intelligence Engine")
+
+# --- SESSION & THREAD MANAGEMENT ---
+# Using UUID as Thread ID to ensure state isolation across different browser sessions
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "swarm_history" not in st.session_state:
+    st.session_state.swarm_history = []
+if "audio_key" not in st.session_state:
+    st.session_state.audio_key = 0
+
+st.sidebar.markdown(f"**Thread ID:** `{st.session_state.thread_id}`")
 st.markdown("Multi-Agent Architecture Powered by OpenAI Swarm.")
 
 def get_api_key(key_name):
@@ -38,14 +52,13 @@ if not PINECONE_API_KEY or not OPENROUTER_API_KEY:
 
 # Initialize Clients
 pc = Pinecone(api_key=PINECONE_API_KEY)
-# Swarm uses standard OpenAI client but pointed to OpenRouter
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY
 )
 swarm_client = Swarm(client=client)
 
-AGENT_MODEL = "google/gemini-2.0-flash-001" # Upgraded to Flash 2.0 for faster reasoning
+AGENT_MODEL = "google/gemini-2.0-flash-001"
 
 # --- 📊 Load Cleaned Local Data ---
 @st.cache_data
@@ -66,20 +79,13 @@ df_global = load_data()
 # --- 🤖 Swarm Agent Functions ---
 
 def run_pandas_query(query_expression: str):
-    """
-    Executes a read-only pandas expression against the global inventory.
-    """
     try:
-        # Strict context for eval
         result = eval(query_expression, {"__builtins__": {}}, {"df": df_global})
         return str(result)
     except Exception as e:
         return f"Query Error: {str(e)}"
 
 def retrieve_retail_knowledge(query: str):
-    """
-    Retrieves semantic context from the retail vector database (Pinecone).
-    """
     try:
         embed_response = pc.inference.embed(
             model="multilingual-e5-large",
@@ -135,19 +141,10 @@ planner_agent = Agent(
     model=AGENT_MODEL
 )
 
-# Hand-off logic
 def transfer_to_analyst(): return data_analyst
 def transfer_to_rag(): return rag_specialist
 
 planner_agent.functions = [transfer_to_analyst, transfer_to_rag]
-
-# --- 💬 Chat UI State Management ---
-if "messages" not in st.session_state:
-    st.session_state.messages = [] # This is the full history for the UI
-if "swarm_history" not in st.session_state:
-    st.session_state.swarm_history = [] # This is the history for the LLM
-if "audio_key" not in st.session_state:
-    st.session_state.audio_key = 0
 
 # Display history
 for msg in st.session_state.messages:
@@ -179,7 +176,6 @@ elif text_input:
 
 # --- 🚀 Swarm Execution ---
 if prompt_text:
-    # 1. Update histories
     display_user_msg = f"🗣️ {prompt_text}" if is_voice else prompt_text
     st.session_state.messages.append({"role": "user", "content": display_user_msg})
     st.session_state.swarm_history.append({"role": "user", "content": prompt_text})
@@ -189,27 +185,21 @@ if prompt_text:
 
     with st.chat_message("assistant"):
         with st.spinner("GlobalCart Brain Thinking..."):
-            # Run Swarm
             response = swarm_client.run(
                 agent=planner_agent,
-                messages=st.session_state.swarm_history,
-                context_variables={"country_context": "None"}
+                messages=st.session_state.swarm_history
             )
             
-            # Extract output and update swarm history
             full_response = response.messages[-1]["content"]
             st.session_state.swarm_history = response.messages
-            
             st.markdown(full_response)
             
-            # TTS
             if is_voice:
                 tts = gTTS(text=full_response, lang='en')
                 fp = io.BytesIO()
                 tts.write_to_fp(fp)
                 st.audio(fp.read(), format="audio/mp3")
 
-            # Save to UI history
             st.session_state.messages.append({"role": "assistant", "content": full_response})
 
             if is_voice:

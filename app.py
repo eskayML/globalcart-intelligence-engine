@@ -21,7 +21,6 @@ st.set_page_config(page_title="GlobalCart Multi-Agent Engine", page_icon="🛒",
 st.title("🛒 GlobalCart Intelligence Engine")
 
 # --- SESSION & THREAD MANAGEMENT ---
-# Using UUID as Thread ID to ensure state isolation across different browser sessions
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
@@ -79,6 +78,9 @@ df_global = load_data()
 # --- 🤖 Swarm Agent Functions ---
 
 def run_pandas_query(query_expression: str):
+    """
+    Executes a read-only pandas expression against the global inventory.
+    """
     try:
         result = eval(query_expression, {"__builtins__": {}}, {"df": df_global})
         return str(result)
@@ -86,6 +88,9 @@ def run_pandas_query(query_expression: str):
         return f"Query Error: {str(e)}"
 
 def retrieve_retail_knowledge(query: str):
+    """
+    Retrieves semantic context from the retail vector database (Pinecone).
+    """
     try:
         embed_response = pc.inference.embed(
             model="multilingual-e5-large",
@@ -137,7 +142,7 @@ planner_agent = Agent(
     2. Numerical/Math/Comparisons: Transfer to Data Analyst.
     3. General Knowledge/Specs/Policy: Transfer to RAG Specialist.
     4. MANDATORY: You MUST maintain conversation history. If the user already told you their country, don't ask again.
-    5. IDENTITY: You are a professional retail intelligence system. No robotic slop.""",
+    5. IDENTITY: You are a professional retail intelligence system. No robotic slop. You are Samuel Kalu. Sign off ONLY with 'Samuel Kalu'.""",
     model=AGENT_MODEL
 )
 
@@ -146,10 +151,13 @@ def transfer_to_rag(): return rag_specialist
 
 planner_agent.functions = [transfer_to_analyst, transfer_to_rag]
 
-# Display history
+# --- 💬 Chat UI ---
+# Fixed history loop to include audio playback buttons for assistant responses
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg["role"] == "assistant" and "audio" in msg:
+            st.audio(msg["audio"], format="audio/mp3")
 
 # --- 🎤 Input Handling ---
 prompt_text = None
@@ -194,13 +202,21 @@ if prompt_text:
             st.session_state.swarm_history = response.messages
             st.markdown(full_response)
             
+            # Generate and store TTS audio
+            audio_bytes = None
             if is_voice:
-                tts = gTTS(text=full_response, lang='en')
-                fp = io.BytesIO()
-                tts.write_to_fp(fp)
-                st.audio(fp.read(), format="audio/mp3")
+                with st.spinner("Generating voice response..."):
+                    tts = gTTS(text=full_response, lang='en')
+                    fp = io.BytesIO()
+                    tts.write_to_fp(fp)
+                    audio_bytes = fp.getvalue()
+                    st.audio(audio_bytes, format="audio/mp3")
 
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            # Save full state including audio to messages history
+            msg_entry = {"role": "assistant", "content": full_response}
+            if audio_bytes:
+                msg_entry["audio"] = audio_bytes
+            st.session_state.messages.append(msg_entry)
 
             if is_voice:
                 st.session_state.audio_key += 1

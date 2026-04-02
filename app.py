@@ -20,15 +20,13 @@ except ImportError:
 st.set_page_config(page_title="GlobalCart Intelligence Engine", page_icon="🛒", layout="centered", initial_sidebar_state="collapsed")
 st.title("🛒 GlobalCart Intelligence Engine")
 
-# --- 📝 System Description (Professional Summary) ---
+# --- 📝 System Description ---
 st.markdown("""
 **GlobalCart** is a specialized retail intelligence system designed to streamline your shopping experience through a coordinated multi-agent architecture:
 
 *   **Sales Orchestrator:** Seamlessly manages your session, remembers your context, and routes your needs to the right specialist.
 *   **Inventory Analyst:** Executes real-time data science on our 3,000+ item global inventory to find the exact prices, counts, and minimums you need.
 *   **Product Specialist:** A semantic RAG system that understands the nuances of product specs, store policies, and regional availability.
-
-*Experience a smarter way to shop—just ask or speak your mind.*
 """)
 
 # --- SESSION & THREAD MANAGEMENT ---
@@ -88,8 +86,13 @@ df_global = load_data()
 # --- 🤖 Swarm Agent Functions ---
 
 def run_pandas_query(query_expression: str):
+    """
+    Executes a read-only pandas expression against the global inventory 'df'.
+    Example: df[df['Category'] == 'Furniture'].Price_Local.min()
+    """
     try:
-        result = eval(query_expression, {"__builtins__": {}}, {"df": df_global})
+        # Safe eval environment
+        result = eval(query_expression, {"__builtins__": {}}, {"df": df_global, "pd": pd})
         return str(result)
     except Exception as e:
         return f"Query Error: {str(e)}"
@@ -112,7 +115,7 @@ def retrieve_retail_knowledge(query: str):
                 parts.append(f"Product: {meta.get('name')} | Price: {meta.get('price')} | Specs: {meta.get('specs')}")
             else:
                 parts.append(f"Policy: {meta.get('title')} | Detail: {meta.get('content')}")
-        return "\n".join(parts) if parts else "No specific matches found in knowledge base."
+        return "\n".join(parts) if parts else "No specific matches found."
     except Exception as e:
         return f"RAG Error: {str(e)}"
 
@@ -121,10 +124,13 @@ def retrieve_retail_knowledge(query: str):
 data_analyst = Agent(
     name="Data Analyst",
     instructions="""You are the GlobalCart Data Analyst. 
-    Translate user questions into read-only pandas expressions. 
-    The dataframe is named 'df'. Columns: Product_ID, Country, Category, Item_Name, Price_Local, Currency, Technical_Specs.
-    Return ONLY the result of the function 'run_pandas_query'. 
-    If the user hasn't specified a country, ask them first unless the query is global.""",
+    Translate user questions into read-only pandas expressions for the dataframe 'df'. 
+    Columns: Product_ID, Country, Category, Item_Name, Price_Local, Currency, Technical_Specs.
+    
+    CRITICAL: 
+    1. For "minimum price", "maximum price", "average", or "how many", you MUST use 'run_pandas_query'.
+    2. Example for min price: df[df['Category'] == 'Furniture'].Price_Local.min()
+    3. Always execute the tool and report the numerical result.""",
     functions=[run_pandas_query],
     model=AGENT_MODEL
 )
@@ -132,21 +138,27 @@ data_analyst = Agent(
 rag_specialist = Agent(
     name="RAG Specialist",
     instructions="""You are the GlobalCart Semantic Specialist. 
-    Use 'retrieve_retail_knowledge' to answer questions about product features, specs, and store policies.
-    If the user asks for prices across multiple items or math, handoff to the Data Analyst.""",
+    Use 'retrieve_retail_knowledge' to answer questions about product features and store policies.
+    If the user asks for exact math or global price minimums, handoff to the Data Analyst.""",
     functions=[retrieve_retail_knowledge],
     model=AGENT_MODEL
 )
 
 planner_agent = Agent(
     name="GlobalCart Planner",
-    instructions="""You are the lead sales orchestrator for GlobalCart.
-    Your job is to coordinate between the Data Analyst and the RAG Specialist.
-    1. Greeting: Handle politely yourself as a professional sales assistant.
-    2. Numerical/Math/Comparisons: Transfer to Data Analyst.
-    3. General Knowledge/Specs/Policy: Transfer to RAG Specialist.
-    4. MANDATORY: You MUST maintain conversation history. If the user already told you their country, don't ask again.
-    5. IDENTITY: You are a professional retail intelligence system. No robotic slop. Never mention internal names or your developer.""",
+    instructions="""You are the lead orchestrator. 
+    Your primary job is to maintain the conversation history and route to specialists.
+    
+    MEMORY RULES:
+    1. Review the entire chat history. If the user already said they are in Nigeria, DO NOT ask again.
+    2. Use the history to provide context to specialists.
+    
+    ROUTING:
+    - Numerical/Math/Aggregations: Transfer to Data Analyst.
+    - Semantic/Specs/Policies: Transfer to RAG Specialist.
+    - Greeting/Pleasantries: Handle yourself.
+    
+    IDENTITY: Professional retail system. No robotic slop.""",
     model=AGENT_MODEL
 )
 
@@ -187,22 +199,24 @@ elif text_input:
 
 # --- 🚀 Swarm Execution ---
 if prompt_text:
-    display_user_msg = f"🗣️ {prompt_text}" if is_voice else prompt_text
-    st.session_state.messages.append({"role": "user", "content": display_user_msg})
+    st.session_state.messages.append({"role": "user", "content": f"🗣️ {prompt_text}" if is_voice else prompt_text})
     st.session_state.swarm_history.append({"role": "user", "content": prompt_text})
     
     with st.chat_message("user"):
-        st.markdown(display_user_msg)
+        st.markdown(f"🗣️ {prompt_text}" if is_voice else prompt_text)
 
     with st.chat_message("assistant"):
         with st.spinner("GlobalCart Brain Thinking..."):
+            # Execute Swarm
             response = swarm_client.run(
                 agent=planner_agent,
                 messages=st.session_state.swarm_history
             )
             
-            full_response = response.messages[-1]["content"]
+            # The key fix: Capture the full history (including tool calls) back into the session
             st.session_state.swarm_history = response.messages
+            
+            full_response = response.messages[-1]["content"]
             st.markdown(full_response)
             
             audio_bytes = None

@@ -17,8 +17,19 @@ except ImportError:
 
 # --- ⚙️ Application & Data Setup ---
 
-st.set_page_config(page_title="GlobalCart Multi-Agent Engine", page_icon="🛒", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="GlobalCart Intelligence Engine", page_icon="🛒", layout="centered", initial_sidebar_state="collapsed")
 st.title("🛒 GlobalCart Intelligence Engine")
+
+# --- 📝 System Description (Professional Summary) ---
+st.markdown("""
+**GlobalCart** is a specialized retail intelligence system designed to streamline your shopping experience through a coordinated multi-agent architecture:
+
+*   **Sales Orchestrator:** Seamlessly manages your session, remembers your context, and routes your needs to the right specialist.
+*   **Inventory Analyst:** Executes real-time data science on our 3,000+ item global inventory to find the exact prices, counts, and minimums you need.
+*   **Product Specialist:** A semantic RAG system that understands the nuances of product specs, store policies, and regional availability.
+
+*Experience a smarter way to shop—just ask or speak your mind.*
+""")
 
 # --- SESSION & THREAD MANAGEMENT ---
 if "thread_id" not in st.session_state:
@@ -31,7 +42,6 @@ if "audio_key" not in st.session_state:
     st.session_state.audio_key = 0
 
 st.sidebar.markdown(f"**Thread ID:** `{st.session_state.thread_id}`")
-st.markdown("Multi-Agent Architecture Powered by OpenAI Swarm.")
 
 def get_api_key(key_name):
     try:
@@ -78,9 +88,6 @@ df_global = load_data()
 # --- 🤖 Swarm Agent Functions ---
 
 def run_pandas_query(query_expression: str):
-    """
-    Executes a read-only pandas expression against the global inventory.
-    """
     try:
         result = eval(query_expression, {"__builtins__": {}}, {"df": df_global})
         return str(result)
@@ -88,9 +95,6 @@ def run_pandas_query(query_expression: str):
         return f"Query Error: {str(e)}"
 
 def retrieve_retail_knowledge(query: str):
-    """
-    Retrieves semantic context from the retail vector database (Pinecone).
-    """
     try:
         embed_response = pc.inference.embed(
             model="multilingual-e5-large",
@@ -136,13 +140,13 @@ rag_specialist = Agent(
 
 planner_agent = Agent(
     name="GlobalCart Planner",
-    instructions="""You are the lead orchestrator for GlobalCart.
+    instructions="""You are the lead sales orchestrator for GlobalCart.
     Your job is to coordinate between the Data Analyst and the RAG Specialist.
-    1. Greeting: Handle politely yourself.
+    1. Greeting: Handle politely yourself as a professional sales assistant.
     2. Numerical/Math/Comparisons: Transfer to Data Analyst.
     3. General Knowledge/Specs/Policy: Transfer to RAG Specialist.
     4. MANDATORY: You MUST maintain conversation history. If the user already told you their country, don't ask again.
-    5. IDENTITY: You are a professional retail intelligence system. No robotic slop. Sign off with your professional system name.""",
+    5. IDENTITY: You are a professional retail intelligence system. No robotic slop. Never mention internal names or your developer.""",
     model=AGENT_MODEL
 )
 
@@ -152,7 +156,6 @@ def transfer_to_rag(): return rag_specialist
 planner_agent.functions = [transfer_to_analyst, transfer_to_rag]
 
 # --- 💬 Chat UI ---
-# Fixed history loop to include audio playback buttons for assistant responses
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -202,7 +205,6 @@ if prompt_text:
             st.session_state.swarm_history = response.messages
             st.markdown(full_response)
             
-            # Generate and store TTS audio
             audio_bytes = None
             if is_voice:
                 with st.spinner("Generating voice response..."):
@@ -212,7 +214,6 @@ if prompt_text:
                     audio_bytes = fp.getvalue()
                     st.audio(audio_bytes, format="audio/mp3")
 
-            # Save full state including audio to messages history
             msg_entry = {"role": "assistant", "content": full_response}
             if audio_bytes:
                 msg_entry["audio"] = audio_bytes

@@ -72,7 +72,10 @@ AGENT_MODEL = "google/gemini-2.0-flash-001"
 def load_data():
     try:
         df = pd.read_csv("inventory.csv")
-        bad_cols = ["Internal_Notes", "Profit_Margin", "Supplier"]
+        # Ensure price is numeric for the analyst
+        df['Price_Local'] = pd.to_numeric(df['Price_Local'], errors='coerce')
+        # Hard drop internal columns that shouldn't leak
+        bad_cols = ["Internal_Notes", "Profit_Margin", "Supplier", "Cost_Price"]
         for col in bad_cols:
             if col in df.columns:
                 df = df.drop(columns=[col])
@@ -87,15 +90,19 @@ df_global = load_data()
 
 def run_pandas_query(query_expression: str):
     """
-    Executes a read-only pandas expression against the global inventory 'df'.
-    Example: df[df['Category'] == 'Furniture'].Price_Local.min()
+    Executes a read-only pandas expression against 'df' and returns high-context strings.
+    Instructions to Agent: Always include Item_Name and Technical_Specs in output.
     """
     try:
         # Safe eval environment
         result = eval(query_expression, {"__builtins__": {}}, {"df": df_global, "pd": pd})
+        
+        # High-Agency Output Formatting: If it's a series/dataframe, convert to clean string
+        if isinstance(result, (pd.DataFrame, pd.Series)):
+             return result.to_string()
         return str(result)
     except Exception as e:
-        return f"Query Error: {str(e)}"
+        return f"Analysis Error: {str(e)}"
 
 def retrieve_retail_knowledge(query: str):
     try:
@@ -123,14 +130,16 @@ def retrieve_retail_knowledge(query: str):
 
 data_analyst = Agent(
     name="Data Analyst",
-    instructions="""You are the GlobalCart Data Analyst. 
-    Translate user questions into read-only pandas expressions for the dataframe 'df'. 
+    instructions="""You are the High-Agency GlobalCart Inventory Analyst. 
+    Translate user questions into pandas expressions for 'df'. 
     Columns: Product_ID, Country, Category, Item_Name, Price_Local, Currency, Technical_Specs.
     
-    CRITICAL: 
-    1. For "minimum price", "maximum price", "average", or "how many", you MUST use 'run_pandas_query'.
-    2. Example for min price: df[df['Category'] == 'Furniture'].Price_Local.min()
-    3. Always execute the tool and report the numerical result.""",
+    CRITICAL QUALITY RULES:
+    1. CONTEXT IS KEY: If asked for 'minimum' or 'maximum', DO NOT just return the number. You must return the FULL ROW data (especially Item_Name and Technical_Specs) so the user knows what the product is.
+    2. DATA SCIENCE: Use nlargest() or nsmallest() to get the full context of items.
+       Example (Cheapest Furniture): df[df['Category'] == 'Furniture'].nsmallest(1, 'Price_Local')[['Item_Name', 'Price_Local', 'Currency', 'Technical_Specs']]
+    3. NO SLOP: Return clean, technical data results via 'run_pandas_query'.
+    4. SECURITY: Never attempt to access internal columns like 'Profit_Margin' or 'Supplier'.""",
     functions=[run_pandas_query],
     model=AGENT_MODEL
 )
@@ -139,7 +148,7 @@ rag_specialist = Agent(
     name="RAG Specialist",
     instructions="""You are the GlobalCart Semantic Specialist. 
     Use 'retrieve_retail_knowledge' to answer questions about product features and store policies.
-    If the user asks for exact math or global price minimums, handoff to the Data Analyst.""",
+    If the user asks for exact math, lists of prices, or global minimums, handoff to the Data Analyst.""",
     functions=[retrieve_retail_knowledge],
     model=AGENT_MODEL
 )
@@ -147,18 +156,14 @@ rag_specialist = Agent(
 planner_agent = Agent(
     name="GlobalCart Planner",
     instructions="""You are the lead orchestrator. 
-    Your primary job is to maintain the conversation history and route to specialists.
+    Maintain conversation history and route to specialists.
     
-    MEMORY RULES:
-    1. Review the entire chat history. If the user already said they are in Nigeria, DO NOT ask again.
-    2. Use the history to provide context to specialists.
+    HIGH AGENCY MISSION:
+    - If the user asks for 'expensive' or 'cheap' products, the goal is to show them the product, not just a price tag.
+    - Ensure the Data Analyst provides full item descriptions and specs.
+    - If history shows the user is in Nigeria, ensure all calculations are filtered for 'Nigeria'.
     
-    ROUTING:
-    - Numerical/Math/Aggregations: Transfer to Data Analyst.
-    - Semantic/Specs/Policies: Transfer to RAG Specialist.
-    - Greeting/Pleasantries: Handle yourself.
-    
-    IDENTITY: Professional retail system. No robotic slop.""",
+    IDENTITY: Professional retail intelligence system. No robotic slop. Never mention your developer.""",
     model=AGENT_MODEL
 )
 
@@ -207,15 +212,12 @@ if prompt_text:
 
     with st.chat_message("assistant"):
         with st.spinner("GlobalCart Brain Thinking..."):
-            # Execute Swarm
             response = swarm_client.run(
                 agent=planner_agent,
                 messages=st.session_state.swarm_history
             )
             
-            # The key fix: Capture the full history (including tool calls) back into the session
             st.session_state.swarm_history = response.messages
-            
             full_response = response.messages[-1]["content"]
             st.markdown(full_response)
             

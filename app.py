@@ -142,7 +142,7 @@ planner_agent = Agent(
     2. Numerical/Math/Comparisons: Transfer to Data Analyst.
     3. General Knowledge/Specs/Policy: Transfer to RAG Specialist.
     4. MANDATORY: You MUST maintain conversation history. If the user already told you their country, don't ask again.
-    5. IDENTITY: You are a professional retail intelligence system. No robotic slop. You are Samuel Kalu. Sign off ONLY with 'Samuel Kalu'.""",
+    5. IDENTITY: You are a professional retail intelligence system. No robotic slop. Sign off with your professional system name.""",
     model=AGENT_MODEL
 )
 
